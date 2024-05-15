@@ -30,8 +30,12 @@
 		getTagsById,
 		updateChatById
 	} from '$lib/apis/chats';
-	import { queryCollection, queryDoc } from '$lib/apis/rag';
-	import { generateOpenAIChatCompletion, generateTitle } from '$lib/apis/openai';
+	import { queryCollection, queryDoc, runWebSearch } from '$lib/apis/rag';
+	import {
+		generateOpenAIChatCompletion,
+		generateSearchQuery,
+		generateTitle
+	} from '$lib/apis/openai';
 
 	import MessageInput from '$lib/components/chat/MessageInput.svelte';
 	import Messages from '$lib/components/chat/Messages.svelte';
@@ -54,6 +58,8 @@
 
 	let selectedModels = [''];
 	let atSelectedModel = '';
+
+	let useWebSearch = false;
 
 	let selectedModelfile = null;
 	$: selectedModelfile =
@@ -283,6 +289,10 @@
 						];
 					}
 
+					if (useWebSearch) {
+						await runWebSearchForPrompt(parentId, responseMessageId);
+					}
+
 					if (model?.external) {
 						await sendPromptOpenAI(model, prompt, responseMessageId, _chatId);
 					} else if (model) {
@@ -295,6 +305,40 @@
 		);
 
 		await chats.set(await getChatList(localStorage.token));
+	};
+
+	const runWebSearchForPrompt = async (parentId: string, responseId: string) => {
+		const responseMessage = history.messages[responseId];
+		responseMessage.progress = $i18n.t('Generating search query');
+		messages = messages;
+		const searchQuery = await generateChatSearchQuery(parentId);
+		if (!searchQuery) {
+			toast.warning($i18n.t('No search query generated'));
+			responseMessage.progress = undefined;
+			messages = messages;
+			return;
+		}
+		responseMessage.progress = $i18n.t("Searching the web for '{{searchQuery}}'", { searchQuery });
+		messages = messages;
+		const searchDocument = await runWebSearch(localStorage.token, searchQuery);
+		if (!searchDocument) {
+			toast.warning($i18n.t('No search results found'));
+			responseMessage.progress = undefined;
+			messages = messages;
+			return;
+		}
+		if (!responseMessage.files) {
+			responseMessage.files = [];
+		}
+		responseMessage.files.push({
+			collection_name: searchDocument!.collection_name,
+			name: searchQuery,
+			type: 'websearch',
+			upload_status: true,
+			error: ''
+		});
+		responseMessage.progress = undefined;
+		messages = messages;
 	};
 
 	const sendPromptOllama = async (model, userPrompt, responseMessageId, _chatId) => {
@@ -356,7 +400,7 @@
 		const docs = messages
 			.filter((message) => message?.files ?? null)
 			.map((message) =>
-				message.files.filter((item) => item.type === 'doc' || item.type === 'collection')
+				message.files.filter((item) => ['doc', 'collection', 'websearch'].includes(item.type))
 			)
 			.flat(1);
 
@@ -549,7 +593,7 @@
 		const docs = messages
 			.filter((message) => message?.files ?? null)
 			.map((message) =>
-				message.files.filter((item) => item.type === 'doc' || item.type === 'collection')
+				message.files.filter((item) => ['doc', 'collection', 'websearch'].includes(item.type))
 			)
 			.flat(1);
 
@@ -833,6 +877,35 @@
 		}
 	};
 
+	const generateChatSearchQuery = async (messageId: string) => {
+		const model = $models.find((model) => model.id === selectedModels[0]);
+
+		const taskModelId =
+			model?.external ?? false
+				? $settings?.title?.modelExternal ?? selectedModels[0]
+				: $settings?.title?.model ?? selectedModels[0];
+		const taskModel = $models.find((model) => model.id === taskModelId);
+
+		const userMessage = history.messages[messageId];
+		const userPrompt = userMessage.content;
+
+		const previousMessages = messages
+			.filter((message) => message.role === 'user')
+			.map((message) => message.content);
+
+		return await generateSearchQuery(
+			localStorage.token,
+			taskModelId,
+			previousMessages,
+			userPrompt,
+			taskModel?.external ?? false
+				? taskModel?.source?.toLowerCase() === 'litellm'
+					? `${LITELLM_API_BASE_URL}/v1`
+					: `${OPENAI_API_BASE_URL}`
+				: `${OLLAMA_API_BASE_URL}/v1`
+		);
+	};
+
 	const setChatTitle = async (_chatId, _title) => {
 		if (_chatId === $chatId) {
 			title = _title;
@@ -932,7 +1005,9 @@
 	bind:prompt
 	bind:autoScroll
 	bind:selectedModel={atSelectedModel}
+	bind:useWebSearch
 	{messages}
 	{submitPrompt}
 	{stopResponse}
+	webSearchAvailable={$config.websearch ?? false}
 />

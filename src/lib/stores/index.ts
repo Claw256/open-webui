@@ -42,7 +42,7 @@ export const showSettings = writable(false);
 export const showArchivedChats = writable(false);
 export const showChangelog = writable(false);
 
-type Model = OpenAIModel | OllamaModel;
+export type Model = OpenAIModel | OllamaModel;
 
 type OpenAIModel = {
 	id: string;
@@ -132,6 +132,7 @@ type Config = {
 	default_models?: string[];
 	default_prompt_suggestions?: PromptSuggestion[];
 	trusted_header_auth?: boolean;
+	websearch?: boolean;
 };
 
 type PromptSuggestion = {
